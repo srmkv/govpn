@@ -1,0 +1,26 @@
+#!/bin/bash
+
+set -e
+
+# Получаем имя текущего пользователя
+USER=$(getent passwd 1000 | cut -d: -f1)
+if [ -z "$USER" ]; then
+  USER=$(logname 2>/dev/null || echo "$SUDO_USER")
+fi
+
+# Разрешаем root доступ к X-сессии (если используется GDM/KDE/etc)
+xhost +SI:localuser:root || true
+
+# Разрешаем запуск от пользователя без пароля sudo на нужные команды
+if [ -n "$USER" ]; then
+  echo "$USER ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/wg-quick" > /etc/sudoers.d/wireguird
+  chmod 440 /etc/sudoers.d/wireguird
+fi
+
+# Включаем и запускаем службу (если есть)
+systemctl daemon-reexec || true
+systemctl daemon-reload || true
+systemctl enable wireguird.service || true
+systemctl start wireguird.service || true
+
+exit 0

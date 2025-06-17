@@ -1,0 +1,15 @@
+[Unit]
+Description=WireGuard GUI Service
+After=graphical.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wireguird
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/YOUR_USER/.Xauthority
+Environment=HOME=/root
+User=root
+Group=root
+
+[Install]
+WantedBy=graphical.target

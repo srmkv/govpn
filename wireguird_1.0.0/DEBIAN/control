@@ -1,0 +1,7 @@
+Package: wireguird
+Version: 1.0.0
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: Your Name <you@example.com>
+Description: GUI приложение для управления WireGuard на Fyne

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<policyconfig>
+  <action id="com.wireguird.pkexec.run">
+    <description>Запуск WireGuird от root</description>
+    <message>Запрашивает запуск WireGuird с правами администратора</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>yes</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+</policyconfig>
