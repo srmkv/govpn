@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=WireGuird VPN
+Comment=Start GUI on login
+Exec=/usr/local/bin/wireguird
+Icon=wireguird
+Terminal=false
+Type=Application
+Categories=Network;Security;
+X-GNOME-Autostart-enabled=true

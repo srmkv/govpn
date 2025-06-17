@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: wireguird
+Source: https://example.com
+
+Files: *
+Copyright: 2025, Your Name <your@email.com>
+License: MIT
+
+License: MIT
+ Permission is hereby granted...

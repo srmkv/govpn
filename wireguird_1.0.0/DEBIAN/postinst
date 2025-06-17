@@ -2,25 +2,33 @@
 
 set -e
 
-# Получаем имя текущего пользователя
+# Получаем имя основного пользователя (UID 1000 — первый обычный пользователь)
 USER=$(getent passwd 1000 | cut -d: -f1)
+
+# fallback, если getent не дал результата
 if [ -z "$USER" ]; then
   USER=$(logname 2>/dev/null || echo "$SUDO_USER")
 fi
 
-# Разрешаем root доступ к X-сессии (если используется GDM/KDE/etc)
-xhost +SI:localuser:root || true
+# Разрешаем root-доступ к X-сессии (на случай запуска GUI с root-правами)
+command -v xhost >/dev/null && xhost +SI:localuser:root || true
 
-# Разрешаем запуск от пользователя без пароля sudo на нужные команды
+# Добавляем разрешение на sudo без пароля для нужных команд
 if [ -n "$USER" ]; then
   echo "$USER ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/wg-quick" > /etc/sudoers.d/wireguird
-  chmod 440 /etc/sudoers.d/wireguird
+  chmod 0440 /etc/sudoers.d/wireguird
 fi
 
-# Включаем и запускаем службу (если есть)
-systemctl daemon-reexec || true
-systemctl daemon-reload || true
-systemctl enable wireguird.service || true
-systemctl start wireguird.service || true
+# Создаём каталог конфигураций WireGuard (если не существует)
+mkdir -p /etc/wireguard
+chmod 755 /etc/wireguard
+
+# Активируем службу (если существует)
+if [ -f /etc/systemd/system/wireguird.service ]; then
+  systemctl daemon-reexec
+  systemctl daemon-reload
+  systemctl enable wireguird.service || true
+  systemctl start wireguird.service || true
+fi
 
 exit 0
