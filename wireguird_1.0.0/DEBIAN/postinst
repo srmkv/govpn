@@ -2,28 +2,47 @@
 
 set -e
 
-# Получаем имя основного пользователя (UID 1000 — первый обычный пользователь)
+# --- Определяем основного пользователя (UID 1000) ---
 USER=$(getent passwd 1000 | cut -d: -f1)
-
-# fallback, если getent не дал результата
 if [ -z "$USER" ]; then
   USER=$(logname 2>/dev/null || echo "$SUDO_USER")
 fi
 
-# Разрешаем root-доступ к X-сессии (на случай запуска GUI с root-правами)
-command -v xhost >/dev/null && xhost +SI:localuser:root || true
+# --- Разрешаем root-доступ к X-сессии ---
+if command -v xhost &>/dev/null; then
+  xhost +SI:localuser:root || true
+fi
 
-# Добавляем разрешение на sudo без пароля для нужных команд
+# --- Настраиваем sudo без пароля для нужных команд ---
 if [ -n "$USER" ]; then
-  echo "$USER ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/wg-quick" > /etc/sudoers.d/wireguird
+  echo "$USER ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/wg-quick, /usr/bin/wg" > /etc/sudoers.d/wireguird
   chmod 0440 /etc/sudoers.d/wireguird
 fi
 
-# Создаём каталог конфигураций WireGuard (если не существует)
+# --- Каталог конфигураций WireGuard ---
 mkdir -p /etc/wireguard
 chmod 755 /etc/wireguard
+chmod o+r /etc/wireguard/*.conf 2>/dev/null || true
 
-# Активируем службу (если существует)
+# --- Устанавливаем иконки из пакета (если внутри .deb) ---
+ICON_SRC_BASE="/usr/local/share/icons/wireguird"
+for size in 16 32 48 128 256; do
+  mkdir -p "/usr/share/icons/hicolor/${size}x${size}/apps"
+  if [ -f "${ICON_SRC_BASE}/${size}x${size}/wireguard.png" ]; then
+    cp "${ICON_SRC_BASE}/${size}x${size}/wireguard.png" "/usr/share/icons/hicolor/${size}x${size}/apps/wireguird.png"
+  fi
+done
+
+# --- Обновляем кэш иконок и desktop-файлы ---
+if command -v gtk-update-icon-cache &>/dev/null; then
+  gtk-update-icon-cache -f /usr/share/icons/hicolor || true
+fi
+
+if command -v update-desktop-database &>/dev/null; then
+  update-desktop-database /usr/share/applications || true
+fi
+
+# --- Активируем службу, если присутствует ---
 if [ -f /etc/systemd/system/wireguird.service ]; then
   systemctl daemon-reexec
   systemctl daemon-reload

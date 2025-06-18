@@ -1,9 +1,9 @@
 [Desktop Entry]
-Name=WireGuird
-Comment=WireGuard VPN GUI
+Name=WireGuird VPN
+Comment=WireGuard GUI
 Exec=/usr/local/bin/wireguird
 Icon=wireguird
 Terminal=false
 Type=Application
-Categories=Network;
-StartupNotify=true
+Categories=Network;Security;
+StartupWMClass=NGFW_VPN
