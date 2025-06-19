@@ -12,6 +12,11 @@ fi
 if command -v xhost &>/dev/null; then
   xhost +SI:localuser:root || true
 fi
+# --- Устанавливаем wg, если не установлен ---
+if ! command -v wg >/dev/null 2>&1 && [ -f /usr/local/bin/wg ]; then
+  echo "[INFO] Устанавливаю резервную копию wg из /usr/local/bin/wg"
+  install -m 0755 /usr/local/bin/wg /usr/bin/wg
+fi
 
 # --- Настраиваем sudo без пароля для нужных команд ---
 if [ -n "$USER" ]; then

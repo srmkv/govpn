@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+# Если wg не найден — ставим wireguard-tools
+if ! command -v wg >/dev/null 2>&1; then
+  echo "WireGuard tools not found, installing wireguard-tools..."
+  apt-get update
+  apt-get install -y wireguard-tools
+fi
+exit 0

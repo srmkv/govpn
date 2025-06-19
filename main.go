@@ -2,51 +2,138 @@ package main
 
 import (
 	"bytes"
+	"image/color"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-    "fyne.io/fyne/v2/theme"
-    "runtime"
-	"gopkg.in/ini.v1"
-    
+	"time"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"gopkg.in/ini.v1"
 )
 
-var tunnelNames []string
-var selectedTunnel string
-var logsOutput *widget.Entry
-var isConnected bool
+// -------------------
+// ColorButton widget
+// -------------------
 
-var statusLabel, pubkeyLabel, portLabel, addrLabel, dnsLabel *widget.Label
-var peerPubkeyLabel, peerAllowedLabel, peerEndpointLabel, peerHandshakeLabel, peerTransferLabel *widget.Label
-var toggleBtn *widget.Button
+type ColorButton struct {
+	widget.BaseWidget
+	Text    string
+	BgColor color.Color
+	OnTap   func()
+}
 
-var tunnelListContainer *fyne.Container
+func NewColorButton(text string, bg color.Color, tap func()) *ColorButton {
+	btn := &ColorButton{Text: text, BgColor: bg, OnTap: tap}
+	btn.ExtendBaseWidget(btn)
+	return btn
+}
+
+func (c *ColorButton) CreateRenderer() fyne.WidgetRenderer {
+	rect := canvas.NewRectangle(c.BgColor)
+	label := canvas.NewText(c.Text, color.White)
+	label.Alignment = fyne.TextAlignCenter
+	label.TextSize = 16
+	objects := []fyne.CanvasObject{rect, label}
+	return &colorButtonRenderer{btn: c, rect: rect, label: label, objects: objects}
+}
+
+type colorButtonRenderer struct {
+	btn     *ColorButton
+	rect    *canvas.Rectangle
+	label   *canvas.Text
+	objects []fyne.CanvasObject
+}
+
+func (r *colorButtonRenderer) Layout(size fyne.Size) {
+	r.rect.Resize(size)
+	r.label.Resize(fyne.NewSize(size.Width, r.label.MinSize().Height))
+	r.label.Move(fyne.NewPos(0, (size.Height-r.label.MinSize().Height)/2))
+}
+
+func (r *colorButtonRenderer) MinSize() fyne.Size {
+	return fyne.NewSize(120, 40)
+}
+
+func (r *colorButtonRenderer) Refresh() {
+	r.rect.FillColor = r.btn.BgColor
+	r.label.Text = r.btn.Text
+	r.rect.Refresh()
+	r.label.Refresh()
+}
+
+func (r *colorButtonRenderer) Objects() []fyne.CanvasObject { return r.objects }
+func (r *colorButtonRenderer) Destroy()                     {}
+
+func (c *ColorButton) Tapped(_ *fyne.PointEvent) {
+	if c.OnTap != nil {
+		c.OnTap()
+	}
+}
+
+// -------------------
+// Global variables
+// -------------------
+
+var (
+	tunnelNames          []string
+	selectedTunnel       string
+	logsOutput           *widget.Entry
+	isConnected          bool
+	statusLabel          *widget.Label
+	pubkeyLabel          *widget.Label
+	portLabel            *widget.Label
+	addrLabel            *widget.Label
+	dnsLabel             *widget.Label
+	peerPubkeyLabel      *widget.Label
+	peerAllowedLabel     *widget.Label
+	peerEndpointLabel    *widget.Label
+	peerHandshakeLabel   *widget.Label
+	peerTransferLabel    *widget.Label
+	tunnelListContainer  *fyne.Container
+	toggleBtn            *ColorButton
+)
+
+// -------------------
+// main()
+// -------------------
 
 func main() {
 	a := app.New()
 	w := a.NewWindow("NGFW_VPN")
-    _ = os.MkdirAll(getConfigDir(), 0755)
+	_ = os.MkdirAll(getConfigDir(), 0755)
 
-	icon, err := fyne.LoadResourceFromPath("/usr/share/icons/hicolor/256x256/apps/wireguird.png")
-	if err == nil {
+	// Загрузка иконки
+	if icon, err := fyne.LoadResourceFromPath("/usr/share/icons/hicolor/256x256/apps/wireguird.png"); err == nil {
 		a.SetIcon(icon)
 		w.SetIcon(icon)
 	}
 
 	w.Resize(fyne.NewSize(800, 500))
 
+	// Периодически проверять статус
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			checkStatusAndUpdateUI()
+		}
+	}()
+
+	// Логи
 	logsOutput = widget.NewMultiLineEntry()
 	logsOutput.SetPlaceHolder("Здесь появятся логи")
 	logsOutput.Wrapping = fyne.TextWrapWord
 
+	// Метки статуса
 	statusLabel = widget.NewLabel("Status: unknown")
 	pubkeyLabel = widget.NewLabel("Public key: unknown")
 	portLabel = widget.NewLabel("Listen port: unknown")
@@ -59,104 +146,47 @@ func main() {
 	peerHandshakeLabel = widget.NewLabel("Latest handshake: unknown")
 	peerTransferLabel = widget.NewLabel("Transfer: unknown")
 
-	toggleBtn = widget.NewButton("Подключить", func() {
-	if selectedTunnel == "" {
-		appendLog("Выберите туннель.")
-		return
-	}
-	name := strings.TrimSuffix(selectedTunnel, ".conf")
+	// Кнопка подключения/отключения
+	toggleBtn = NewColorButton("Подключить", color.RGBA{0x1e, 0x1d, 0x85, 0xff}, toggleAction)
+	updateToggleButton()
 
-	var checkCmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		checkCmd = exec.Command("sc", "query", name)
-	} else {
-		checkCmd = exec.Command("sudo", "wg", "show", name)
-	}
-	checkCmd.Stdin = strings.NewReader("")
-	var checkOut bytes.Buffer
-	checkCmd.Stdout = &checkOut
-	checkCmd.Stderr = &checkOut
-	checkCmd.Run()
+	// Кнопка "Обновить"
+	refreshBtn := widget.NewButton("🔄", checkStatusAndUpdateUI)
 
-	if runtime.GOOS == "windows" {
-	checkCmd = exec.Command("sc", "query", "WireGuardTunnel$"+name)
-} else {
-		isConnected = strings.Contains(checkOut.String(), "interface: "+name)
-	}
-
-	var cmd *exec.Cmd
-	if isConnected {
-	if runtime.GOOS == "windows" {
-		serviceName := "WireGuardTunnel$" + name
-		_ = exec.Command("sc", "stop", serviceName).Run()
-
-		// Удаляем туннель по имени (без .conf)
-		cmd = exec.Command("wireguard.exe", "/uninstalltunnelservice", name)
-	} else {
-		cmd = exec.Command("sudo", "wg-quick", "down", name)
-	}
-} else {
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("wireguard.exe", "/installtunnelservice", filepath.Join(getConfigDir(), name+".conf"))
-	} else {
-		cmd = exec.Command("sudo", "wg-quick", "up", name)
-	}
-}
-
-
-	cmd.Stdin = strings.NewReader("")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-
-	if err != nil {
-		appendLog("Ошибка " + map[bool]string{true: "отключения", false: "подключения"}[isConnected] + ":\n" + out.String())
-	} else {
-		isConnected = !isConnected
-		status := map[bool]string{true: "Подключено", false: "Отключено"}[isConnected]
-		toggleBtn.SetText(map[bool]string{true: "Отключить", false: "Подключить"}[isConnected])
-		statusLabel.SetText("Status: " + status)
-		appendLog(status + ":\n" + out.String())
-	}
-})
-
-
+	// Кнопка "Добавить туннель"
 	addBtn := widget.NewButton("Добавить туннель", func() {
-    dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
-        if err != nil || reader == nil {
-            return
-        }
-        data, _ := io.ReadAll(reader)
-        name := filepath.Base(reader.URI().Path())
-        path := filepath.Join(getConfigDir(), name)
-        tmp := filepath.Join(os.TempDir(), name)
+		dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
+				return
+			}
+			data, _ := io.ReadAll(reader)
+			name := filepath.Base(reader.URI().Path())
+			path := filepath.Join(getConfigDir(), name)
+			tmp := filepath.Join(os.TempDir(), name)
+			_ = os.WriteFile(tmp, data, 0600)
 
-        _ = os.WriteFile(tmp, data, 0600)
+			var cmd *exec.Cmd
+			if runtime.GOOS == "windows" {
+				cmd = exec.Command("cmd", "/C", "copy", "/Y", tmp, path)
+			} else {
+				cmd = exec.Command("bash", "-c", "sudo cp '"+tmp+"' '"+path+"' && sudo chmod o+r '"+path+"'")
+			}
+			cmd.Stdin = strings.NewReader("")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				appendLog("Ошибка добавления:\n" + string(out))
+				return
+			}
 
-        var cmd *exec.Cmd
-        if runtime.GOOS == "windows" {
-            cmd = exec.Command("cmd", "/C", "copy", "/Y", tmp, path)
-        } else {
-            cmd = exec.Command("bash", "-c", "sudo cp '"+tmp+"' '"+path+"' && sudo chmod o+r '"+path+"'")
-        }
+			tunnelNames = append(tunnelNames, name)
+			refreshTunnelList(w)
+			appendLog("Добавлен: " + name)
+		}, w)
+	})
 
-        cmd.Stdin = strings.NewReader("")
-        outBytes, err := cmd.CombinedOutput()
-        if err != nil {
-            appendLog("Ошибка добавления:\n" + string(outBytes))
-            return
-        }
-
-        tunnelNames = append(tunnelNames, name)
-        refreshTunnelList(w)
-        appendLog("Добавлен: " + name)
-    }, w)
-})
-
-
+	// Компоновка интерфейса
 	interfaceBox := container.NewVBox(
-		statusLabel, pubkeyLabel, portLabel, addrLabel, dnsLabel, toggleBtn,
+		statusLabel, pubkeyLabel, portLabel, addrLabel, dnsLabel,
+		container.NewHBox(toggleBtn, refreshBtn),
 	)
 	peerBox := container.NewVBox(
 		peerPubkeyLabel, peerAllowedLabel, peerEndpointLabel, peerHandshakeLabel, peerTransferLabel,
@@ -173,14 +203,98 @@ func main() {
 		container.NewTabItem("Конфигурации", split),
 		container.NewTabItem("Логи", logsOutput),
 	)
-
 	w.SetContent(tabs)
 
 	loadTunnels()
 	refreshTunnelList(w)
-
 	w.ShowAndRun()
 }
+
+// -------------------
+// toggleAction()
+// -------------------
+
+func toggleAction() {
+	if selectedTunnel == "" {
+		appendLog("Выберите туннель.")
+		return
+	}
+	name := strings.TrimSuffix(selectedTunnel, ".conf")
+
+	// Проверяем, подключён ли
+	var checkCmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		checkCmd = exec.Command("sc", "query", "WireGuardTunnel$"+name)
+	} else {
+		checkCmd = exec.Command("sudo", "wg", "show", name)
+	}
+	var outBuf bytes.Buffer
+	checkCmd.Stdout, checkCmd.Stderr = &outBuf, &outBuf
+	checkCmd.Run()
+	if runtime.GOOS == "windows" {
+		isConnected = strings.Contains(outBuf.String(), "RUNNING")
+	} else {
+		isConnected = strings.Contains(outBuf.String(), "interface: "+name)
+	}
+
+	// Собираем команду up/down
+	var cmd *exec.Cmd
+	if isConnected {
+		// Отключаем
+		if runtime.GOOS == "windows" {
+			service := "WireGuardTunnel$" + name
+			_ = exec.Command("sc", "stop", service).Run()
+			cmd = exec.Command("wireguard.exe", "/uninstalltunnelservice", name)
+			_ = exec.Command("netsh", "interface", "delete", "interface", service).Run()
+		} else {
+			cmd = exec.Command("sudo", "wg-quick", "down", name)
+		}
+	} else {
+		// Подключаем
+		if runtime.GOOS == "windows" {
+			cmd = exec.Command("wireguard.exe", "/installtunnelservice", filepath.Join(getConfigDir(), name+".conf"))
+		} else {
+			cmd = exec.Command("sudo", "wg-quick", "up", name)
+		}
+	}
+
+	cmd.Stdin = strings.NewReader("")
+	var result bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &result, &result
+	err := cmd.Run()
+	if err != nil {
+		action := map[bool]string{true: "отключения", false: "подключения"}[isConnected]
+		appendLog("Ошибка "+action+":\n" + result.String())
+		return
+	}
+
+	// Успешно
+	isConnected = !isConnected
+	status := map[bool]string{true: "Подключено", false: "Отключено"}[isConnected]
+	statusLabel.SetText("Status: " + status)
+	appendLog(status + ":\n" + result.String())
+
+	updateToggleButton()
+}
+
+// -------------------
+// updateToggleButton()
+// -------------------
+
+func updateToggleButton() {
+	if isConnected {
+		toggleBtn.Text = "Отключить"
+		toggleBtn.BgColor = color.RGBA{0xc7, 0x22, 0x1a, 0xff}
+	} else {
+		toggleBtn.Text = "Подключить"
+		toggleBtn.BgColor = color.RGBA{0x28, 0xa7, 0x45, 0xff}
+	}
+	toggleBtn.Refresh()
+}
+
+// -------------------
+// loadTunnels()
+// -------------------
 
 func loadTunnels() {
 	tunnelNames = nil
@@ -196,72 +310,57 @@ func loadTunnels() {
 	}
 }
 
+// -------------------
+// refreshTunnelList()
+// -------------------
+
 func refreshTunnelList(w fyne.Window) {
 	tunnelListContainer.Objects = nil
-
 	for _, name := range tunnelNames {
 		confName := name
-
 		label := widget.NewLabel(confName)
 		label.Alignment = fyne.TextAlignLeading
 
-		// Кнопка редактирования
 		editBtn := widget.NewButton("✏️", func() {
 			editConfigDialog(w, confName)
 		})
 		editBtn.Importance = widget.LowImportance
 
-		// Кнопка удаления
-	removeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
-	dialog.ShowConfirm("Удалить конфигурацию", "Удалить "+confName+"?", func(confirm bool) {
-		if confirm {
-			var cmd *exec.Cmd
-if runtime.GOOS == "windows" {
-	_ = exec.Command("wireguard.exe", "/uninstalltunnelservice", filepath.Join(getConfigDir(), confName)).Run()
-	cmd = exec.Command("cmd", "/C", "del", filepath.Join(getConfigDir(), confName))
-} else {
-	cmd = exec.Command("sudo", "rm", "/etc/wireguard/"+confName)
-}
-
-			cmd.Stdin = strings.NewReader("") // не блокируем ожидание ввода
-			var out bytes.Buffer
-			cmd.Stdout = &out
-			cmd.Stderr = &out
-			err := cmd.Run()
-			if err != nil {
-				appendLog("Ошибка удаления:\n" + out.String())
-			} else {
-				appendLog("Удалено: " + confName)
-				loadTunnels()
-				refreshTunnelList(w)
-			}
-		}
-	}, w)
-})
-
-
+		removeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
+			dialog.ShowConfirm("Удалить конфигурацию", "Удалить "+confName+"?", func(confirm bool) {
+				if !confirm {
+					return
+				}
+				var cmd *exec.Cmd
+				if runtime.GOOS == "windows" {
+					_ = exec.Command("wireguard.exe", "/uninstalltunnelservice", strings.TrimSuffix(confName, ".conf")).Run()
+					cmd = exec.Command("cmd", "/C", "del", filepath.Join(getConfigDir(), confName))
+				} else {
+					cmd = exec.Command("sudo", "rm", filepath.Join(getConfigDir(), confName))
+				}
+				cmd.Stdin = strings.NewReader("")
+				var out bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &out, &out
+				if err := cmd.Run(); err != nil {
+					appendLog("Ошибка удаления:\n" + out.String())
+				} else {
+					appendLog("Удалено: " + confName)
+					loadTunnels()
+					refreshTunnelList(w)
+				}
+			}, w)
+		})
 		removeBtn.Importance = widget.DangerImportance
 
-		// Горизонтальный блок: имя + иконки
-		row := container.NewBorder(nil, nil, nil,
-			container.NewHBox(editBtn, removeBtn),
-			label,
-		)
-
-		// Кнопка-слой на всю строку для выбора
+		row := container.NewBorder(nil, nil, nil, container.NewHBox(editBtn, removeBtn), label)
 		selectBtn := widget.NewButton("", func() {
 			selectedTunnel = confName
-			
-			confPath := filepath.Join(getConfigDir(), confName)
-
-			iface, peer, err := parseConfig(confPath)
+			checkStatusAndUpdateUI()
+			iface, peer, err := parseConfig(filepath.Join(getConfigDir(), confName))
 			if err != nil {
 				appendLog("Ошибка чтения конфига: " + err.Error())
 				return
 			}
-			statusLabel.SetText("Status: Inactive")
-			pubkeyLabel.SetText("Public key: unknown")
-			portLabel.SetText("Listen port: unknown")
 			addrLabel.SetText("Addresses: " + iface["Address"])
 			dnsLabel.SetText("DNS servers: " + iface["DNS"])
 			peerPubkeyLabel.SetText("Public key: " + peer["PublicKey"])
@@ -269,45 +368,38 @@ if runtime.GOOS == "windows" {
 			peerEndpointLabel.SetText("Endpoint: " + peer["Endpoint"])
 			peerHandshakeLabel.SetText("Latest handshake: unknown")
 			peerTransferLabel.SetText("Transfer: unknown")
-			isConnected = false
-			toggleBtn.SetText("Подключить")
 		})
 		selectBtn.Importance = widget.MediumImportance
-		selectBtn.SetText("") // пустой текст
+		selectBtn.SetText("")
 
 		rowContainer := container.NewMax(selectBtn, row)
 		tunnelListContainer.Add(rowContainer)
 	}
-
 	tunnelListContainer.Refresh()
 }
 
-
+// -------------------
+// editConfigDialog()
+// -------------------
 
 func editConfigDialog(w fyne.Window, filename string) {
-
 	path := filepath.Join(getConfigDir(), filename)
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		dialog.ShowError(err, w)
 		return
 	}
-
 	entry := widget.NewMultiLineEntry()
 	entry.SetText(string(data))
 
 	var dlg dialog.Dialog
-
 	saveBtn := widget.NewButton("Сохранить", func() {
-		tmp := "/tmp/" + filename
+		tmp := filepath.Join(os.TempDir(), filename)
 		_ = os.WriteFile(tmp, []byte(entry.Text), 0600)
-
 		cmd := exec.Command("sudo", "cp", tmp, path)
 		cmd.Stdin = strings.NewReader("")
 		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
+		cmd.Stdout, cmd.Stderr = &out, &out
 		if err := cmd.Run(); err != nil {
 			appendLog("Ошибка при сохранении:\n" + out.String())
 			return
@@ -322,40 +414,75 @@ func editConfigDialog(w fyne.Window, filename string) {
 	dlg.Show()
 }
 
+// -------------------
+// parseConfig()
+// -------------------
+
 func parseConfig(path string) (map[string]string, map[string]string, error) {
 	cfg, err := ini.Load(path)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	iface := map[string]string{}
-	peer := map[string]string{}
-
-	ifaceSec := cfg.Section("Interface")
-	peerSec := cfg.Section("Peer")
-
-	iface["Address"] = ifaceSec.Key("Address").String()
-	iface["DNS"] = ifaceSec.Key("DNS").String()
-	iface["PrivateKey"] = ifaceSec.Key("PrivateKey").String()
-
-	peer["PublicKey"] = peerSec.Key("PublicKey").String()
-	peer["AllowedIPs"] = peerSec.Key("AllowedIPs").String()
-	peer["Endpoint"] = peerSec.Key("Endpoint").String()
-
+	iface := map[string]string{
+		"Address":    cfg.Section("Interface").Key("Address").String(),
+		"DNS":        cfg.Section("Interface").Key("DNS").String(),
+		"PrivateKey": cfg.Section("Interface").Key("PrivateKey").String(),
+	}
+	peer := map[string]string{
+		"PublicKey":  cfg.Section("Peer").Key("PublicKey").String(),
+		"AllowedIPs": cfg.Section("Peer").Key("AllowedIPs").String(),
+		"Endpoint":   cfg.Section("Peer").Key("Endpoint").String(),
+	}
 	return iface, peer, nil
 }
 
+// -------------------
+// appendLog()
+// -------------------
+
 func appendLog(msg string) {
-	current := logsOutput.Text
-	logsOutput.SetText(current + "\n" + msg)
+	logsOutput.SetText(strings.TrimSpace(logsOutput.Text) + "\n" + msg)
 }
+
+// -------------------
+// getConfigDir()
+// -------------------
 
 func getConfigDir() string {
 	if fyne.CurrentDevice().IsMobile() {
-		return "" // не используется
+		return ""
 	}
 	if runtime.GOOS == "windows" {
 		return filepath.Join(os.Getenv("APPDATA"), "WireGuird")
 	}
 	return "/etc/wireguard"
+}
+
+// -------------------
+// checkStatusAndUpdateUI()
+// -------------------
+
+func checkStatusAndUpdateUI() {
+	if selectedTunnel == "" {
+		return
+	}
+	name := strings.TrimSuffix(selectedTunnel, ".conf")
+	var checkCmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		checkCmd = exec.Command("sc", "query", "WireGuardTunnel$"+name)
+	} else {
+		checkCmd = exec.Command("sudo", "wg", "show", name)
+	}
+	var out bytes.Buffer
+	checkCmd.Stdout, checkCmd.Stderr = &out, &out
+	checkCmd.Run()
+
+	if runtime.GOOS == "windows" {
+		isConnected = strings.Contains(out.String(), "RUNNING")
+	} else {
+		isConnected = strings.Contains(out.String(), "interface: "+name)
+	}
+	status := map[bool]string{true: "Подключено", false: "Отключено"}[isConnected]
+	statusLabel.SetText("Status: " + status)
+	updateToggleButton()
 }
