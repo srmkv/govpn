@@ -3,8 +3,8 @@ Version: 1.0.0
 Section: net
 Priority: optional
 Architecture: amd64
-Depends: wireguard-tools, sudo
-Maintainer: Your Name <your@email.com>
+Depends:  sudo
+Maintainer: Sergei Manenkov <smanenkov@s-terra.ru>
 Description: GUI VPN NGFW
  GUI VPN NGFW client for managing WireGuard tunnels securely.
-Homepage: https://example.com
+Homepage: https://s-terra.com

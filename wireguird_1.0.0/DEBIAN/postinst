@@ -15,7 +15,7 @@ fi
 
 # --- Настраиваем sudo без пароля для нужных команд ---
 if [ -n "$USER" ]; then
-  echo "$USER ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/wg-quick, /usr/bin/wg" > /etc/sudoers.d/wireguird
+ echo "$USER ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/wg-quick, /usr/bin/wg, /bin/rm, /bin/chmod" > /etc/sudoers.d/wireguird
   chmod 0440 /etc/sudoers.d/wireguird
 fi
 
