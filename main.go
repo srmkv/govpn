@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
     "fyne.io/fyne/v2/theme"
-
+    "runtime"
 	"gopkg.in/ini.v1"
-
+    
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
@@ -33,6 +33,7 @@ var tunnelListContainer *fyne.Container
 func main() {
 	a := app.New()
 	w := a.NewWindow("NGFW_VPN")
+    _ = os.MkdirAll(getConfigDir(), 0755)
 
 	icon, err := fyne.LoadResourceFromPath("/usr/share/icons/hicolor/256x256/apps/wireguird.png")
 	if err == nil {
@@ -59,72 +60,100 @@ func main() {
 	peerTransferLabel = widget.NewLabel("Transfer: unknown")
 
 	toggleBtn = widget.NewButton("Подключить", func() {
-		if selectedTunnel == "" {
-			appendLog("Выберите туннель.")
-			return
-		}
-		name := strings.TrimSuffix(selectedTunnel, ".conf")
+	if selectedTunnel == "" {
+		appendLog("Выберите туннель.")
+		return
+	}
+	name := strings.TrimSuffix(selectedTunnel, ".conf")
 
-		checkCmd := exec.Command("sudo", "wg", "show", name)
-		checkCmd.Stdin = strings.NewReader("")
-		var checkOut bytes.Buffer
-		checkCmd.Stdout = &checkOut
-		checkCmd.Stderr = &checkOut
-		checkCmd.Run()
+	var checkCmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		checkCmd = exec.Command("sc", "query", name)
+	} else {
+		checkCmd = exec.Command("sudo", "wg", "show", name)
+	}
+	checkCmd.Stdin = strings.NewReader("")
+	var checkOut bytes.Buffer
+	checkCmd.Stdout = &checkOut
+	checkCmd.Stderr = &checkOut
+	checkCmd.Run()
 
+	if runtime.GOOS == "windows" {
+	checkCmd = exec.Command("sc", "query", "WireGuardTunnel$"+name)
+} else {
 		isConnected = strings.Contains(checkOut.String(), "interface: "+name)
+	}
 
-		var cmd *exec.Cmd
-		if isConnected {
-			cmd = exec.Command("sudo", "wg-quick", "down", name)
-		} else {
-			cmd = exec.Command("sudo", "wg-quick", "up", name)
-		}
+	var cmd *exec.Cmd
+	if isConnected {
+	if runtime.GOOS == "windows" {
+		serviceName := "WireGuardTunnel$" + name
+		_ = exec.Command("sc", "stop", serviceName).Run()
 
-		cmd.Stdin = strings.NewReader("")
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		err := cmd.Run()
+		// Удаляем туннель по имени (без .conf)
+		cmd = exec.Command("wireguard.exe", "/uninstalltunnelservice", name)
+	} else {
+		cmd = exec.Command("sudo", "wg-quick", "down", name)
+	}
+} else {
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("wireguard.exe", "/installtunnelservice", filepath.Join(getConfigDir(), name+".conf"))
+	} else {
+		cmd = exec.Command("sudo", "wg-quick", "up", name)
+	}
+}
 
-		if err != nil {
-			appendLog("Ошибка " + map[bool]string{true: "отключения", false: "подключения"}[isConnected] + ":\n" + out.String())
-		} else {
-			isConnected = !isConnected
-			status := map[bool]string{true: "Подключено", false: "Отключено"}[isConnected]
-			toggleBtn.SetText(map[bool]string{true: "Отключить", false: "Подключить"}[isConnected])
-			statusLabel.SetText("Status: " + status)
-			appendLog(status + ":\n" + out.String())
-		}
-	})
+
+	cmd.Stdin = strings.NewReader("")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+
+	if err != nil {
+		appendLog("Ошибка " + map[bool]string{true: "отключения", false: "подключения"}[isConnected] + ":\n" + out.String())
+	} else {
+		isConnected = !isConnected
+		status := map[bool]string{true: "Подключено", false: "Отключено"}[isConnected]
+		toggleBtn.SetText(map[bool]string{true: "Отключить", false: "Подключить"}[isConnected])
+		statusLabel.SetText("Status: " + status)
+		appendLog(status + ":\n" + out.String())
+	}
+})
+
 
 	addBtn := widget.NewButton("Добавить туннель", func() {
-		dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil || reader == nil {
-				return
-			}
-			data, _ := io.ReadAll(reader)
-			name := filepath.Base(reader.URI().Path())
-			path := "/etc/wireguard/" + name
+    dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+        if err != nil || reader == nil {
+            return
+        }
+        data, _ := io.ReadAll(reader)
+        name := filepath.Base(reader.URI().Path())
+        path := filepath.Join(getConfigDir(), name)
+        tmp := filepath.Join(os.TempDir(), name)
 
-			tmp := "/tmp/" + name
-			_ = os.WriteFile(tmp, data, 0600)
+        _ = os.WriteFile(tmp, data, 0600)
 
-			cmd := exec.Command("bash", "-c", "sudo cp '"+tmp+"' '"+path+"' && sudo chmod o+r '"+path+"'")
-			cmd.Stdin = strings.NewReader("")
-			var out bytes.Buffer
-			cmd.Stdout = &out
-			cmd.Stderr = &out
-			if err := cmd.Run(); err != nil {
-				appendLog("Ошибка добавления:\n" + out.String())
-				return
-			}
+        var cmd *exec.Cmd
+        if runtime.GOOS == "windows" {
+            cmd = exec.Command("cmd", "/C", "copy", "/Y", tmp, path)
+        } else {
+            cmd = exec.Command("bash", "-c", "sudo cp '"+tmp+"' '"+path+"' && sudo chmod o+r '"+path+"'")
+        }
 
-			tunnelNames = append(tunnelNames, name)
-			refreshTunnelList(w)
-			appendLog("Добавлен: " + name)
-		}, w)
-	})
+        cmd.Stdin = strings.NewReader("")
+        outBytes, err := cmd.CombinedOutput()
+        if err != nil {
+            appendLog("Ошибка добавления:\n" + string(outBytes))
+            return
+        }
+
+        tunnelNames = append(tunnelNames, name)
+        refreshTunnelList(w)
+        appendLog("Добавлен: " + name)
+    }, w)
+})
+
 
 	interfaceBox := container.NewVBox(
 		statusLabel, pubkeyLabel, portLabel, addrLabel, dnsLabel, toggleBtn,
@@ -155,7 +184,7 @@ func main() {
 
 func loadTunnels() {
 	tunnelNames = nil
-	files, err := os.ReadDir("/etc/wireguard/")
+	files, err := os.ReadDir(getConfigDir())
 	if err != nil {
 		appendLog("Ошибка чтения каталога: " + err.Error())
 		return
@@ -186,7 +215,14 @@ func refreshTunnelList(w fyne.Window) {
 	removeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
 	dialog.ShowConfirm("Удалить конфигурацию", "Удалить "+confName+"?", func(confirm bool) {
 		if confirm {
-			cmd := exec.Command("sudo", "rm", "/etc/wireguard/"+confName)
+			var cmd *exec.Cmd
+if runtime.GOOS == "windows" {
+	_ = exec.Command("wireguard.exe", "/uninstalltunnelservice", filepath.Join(getConfigDir(), confName)).Run()
+	cmd = exec.Command("cmd", "/C", "del", filepath.Join(getConfigDir(), confName))
+} else {
+	cmd = exec.Command("sudo", "rm", "/etc/wireguard/"+confName)
+}
+
 			cmd.Stdin = strings.NewReader("") // не блокируем ожидание ввода
 			var out bytes.Buffer
 			cmd.Stdout = &out
@@ -215,7 +251,9 @@ func refreshTunnelList(w fyne.Window) {
 		// Кнопка-слой на всю строку для выбора
 		selectBtn := widget.NewButton("", func() {
 			selectedTunnel = confName
-			confPath := "/etc/wireguard/" + confName
+			
+			confPath := filepath.Join(getConfigDir(), confName)
+
 			iface, peer, err := parseConfig(confPath)
 			if err != nil {
 				appendLog("Ошибка чтения конфига: " + err.Error())
@@ -247,7 +285,9 @@ func refreshTunnelList(w fyne.Window) {
 
 
 func editConfigDialog(w fyne.Window, filename string) {
-	path := "/etc/wireguard/" + filename
+
+	path := filepath.Join(getConfigDir(), filename)
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		dialog.ShowError(err, w)
@@ -308,4 +348,14 @@ func parseConfig(path string) (map[string]string, map[string]string, error) {
 func appendLog(msg string) {
 	current := logsOutput.Text
 	logsOutput.SetText(current + "\n" + msg)
+}
+
+func getConfigDir() string {
+	if fyne.CurrentDevice().IsMobile() {
+		return "" // не используется
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("APPDATA"), "WireGuird")
+	}
+	return "/etc/wireguard"
 }

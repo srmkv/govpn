@@ -1,2 +1,5 @@
 [Details]
-  Build = 1
+  Icon = "assets/icon.png"
+  Name = "WireGuird VPN"
+  ID = "com.wireguird.app"
+  Build = 22
