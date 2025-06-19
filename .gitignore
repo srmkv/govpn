@@ -1,5 +1,6 @@
-/wireguird_windows
+# сборки и бинарники
+wireguird_windows/
 wireguird_windows.zip
 *.exe
-/win-dist
-/ddl/*
+win-dist/
+ddl/
