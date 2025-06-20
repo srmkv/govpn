@@ -214,68 +214,59 @@ func main() {
 // toggleAction()
 // -------------------
 
+// toggleAction — подключение/отключение туннеля
 func toggleAction() {
 	if selectedTunnel == "" {
 		appendLog("Выберите туннель.")
 		return
 	}
 	name := strings.TrimSuffix(selectedTunnel, ".conf")
+	confPath := filepath.Join(getConfigDir(), name+".conf")
 
-	// Проверяем, подключён ли
+	// Проверка статуса
 	var checkCmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		checkCmd = exec.Command("sc", "query", "WireGuardTunnel$"+name)
 	} else {
-		checkCmd = exec.Command("sudo", "wg", "show", name)
+		checkCmd = exec.Command("wg", "show", name)
 	}
-	var outBuf bytes.Buffer
-	checkCmd.Stdout, checkCmd.Stderr = &outBuf, &outBuf
+	var buf bytes.Buffer
+	checkCmd.Stdout, checkCmd.Stderr = &buf, &buf
 	checkCmd.Run()
-	if runtime.GOOS == "windows" {
-		isConnected = strings.Contains(outBuf.String(), "RUNNING")
-	} else {
-		isConnected = strings.Contains(outBuf.String(), "interface: "+name)
-	}
+	isConnected = strings.Contains(buf.String(), name)
 
-	// Собираем команду up/down
+	// up/down
 	var cmd *exec.Cmd
 	if isConnected {
-		// Отключаем
 		if runtime.GOOS == "windows" {
-			service := "WireGuardTunnel$" + name
-			_ = exec.Command("sc", "stop", service).Run()
 			cmd = exec.Command("wireguard.exe", "/uninstalltunnelservice", name)
-			_ = exec.Command("netsh", "interface", "delete", "interface", service).Run()
 		} else {
-			cmd = exec.Command("sudo", "wg-quick", "down", name)
+			cmd = exec.Command("sudo", "-S", "wg-quick", "down", confPath)
 		}
 	} else {
-		// Подключаем
 		if runtime.GOOS == "windows" {
-			cmd = exec.Command("wireguard.exe", "/installtunnelservice", filepath.Join(getConfigDir(), name+".conf"))
+			cmd = exec.Command("wireguard.exe", "/installtunnelservice", confPath)
 		} else {
-			cmd = exec.Command("sudo", "wg-quick", "up", name)
+			cmd = exec.Command("sudo", "-S", "wg-quick", "up", confPath)
 		}
 	}
-
 	cmd.Stdin = strings.NewReader("")
-	var result bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &result, &result
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	if err != nil {
 		action := map[bool]string{true: "отключения", false: "подключения"}[isConnected]
-		appendLog("Ошибка "+action+":\n" + result.String())
+		appendLog("Ошибка " + action + ":\n" + out.String())
 		return
 	}
 
-	// Успешно
 	isConnected = !isConnected
 	status := map[bool]string{true: "Подключено", false: "Отключено"}[isConnected]
 	statusLabel.SetText("Status: " + status)
-	appendLog(status + ":\n" + result.String())
-
+	appendLog(status + ":\n" + out.String())
 	updateToggleButton()
 }
+
 
 // -------------------
 // updateToggleButton()
@@ -449,13 +440,12 @@ func appendLog(msg string) {
 // -------------------
 
 func getConfigDir() string {
-	if fyne.CurrentDevice().IsMobile() {
-		return ""
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// fallback
+		return "/tmp/wireguird"
 	}
-	if runtime.GOOS == "windows" {
-		return filepath.Join(os.Getenv("APPDATA"), "WireGuird")
-	}
-	return "/etc/wireguard"
+	return filepath.Join(home, ".wireguird")
 }
 
 // -------------------
