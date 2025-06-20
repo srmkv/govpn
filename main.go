@@ -223,33 +223,26 @@ func toggleAction() {
 	name := strings.TrimSuffix(selectedTunnel, ".conf")
 	confPath := filepath.Join(getConfigDir(), name+".conf")
 
-	// Проверка статуса
 	var checkCmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		checkCmd = exec.Command("sc", "query", "WireGuardTunnel$"+name)
 	} else {
-		checkCmd = exec.Command("wg", "show", name)
+		checkCmd = exec.Command("sudo", "wg", "show", name)
 	}
 	var buf bytes.Buffer
 	checkCmd.Stdout, checkCmd.Stderr = &buf, &buf
 	checkCmd.Run()
 	isConnected = strings.Contains(buf.String(), name)
 
-	// up/down
 	var cmd *exec.Cmd
 	if isConnected {
-		if runtime.GOOS == "windows" {
-			cmd = exec.Command("wireguard.exe", "/uninstalltunnelservice", name)
-		} else {
-			cmd = exec.Command("sudo", "-S", "wg-quick", "down", confPath)
-		}
+		// используем путь — чтобы точно отключался тот конфиг
+		cmd = exec.Command("sudo", "-S", "wg-quick", "down", confPath)
 	} else {
-		if runtime.GOOS == "windows" {
-			cmd = exec.Command("wireguard.exe", "/installtunnelservice", confPath)
-		} else {
-			cmd = exec.Command("sudo", "-S", "wg-quick", "up", confPath)
-		}
+		_ = os.Chmod(confPath, 0600) // убираем warning
+		cmd = exec.Command("sudo", "-S", "wg-quick", "up", confPath)
 	}
+
 	cmd.Stdin = strings.NewReader("")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -265,7 +258,12 @@ func toggleAction() {
 	statusLabel.SetText("Status: " + status)
 	appendLog(status + ":\n" + out.String())
 	updateToggleButton()
+
+	// 🔄 ОБНОВЛЯЕМ СПИСОК ДЛЯ ОБНОВЛЕНИЯ ЦВЕТА КРУЖКА
+	refreshTunnelList(fyne.CurrentApp().Driver().AllWindows()[0])
 }
+
+
 
 
 // -------------------
@@ -309,8 +307,23 @@ func refreshTunnelList(w fyne.Window) {
 	tunnelListContainer.Objects = nil
 	for _, name := range tunnelNames {
 		confName := name
-		label := widget.NewLabel(confName)
-		label.Alignment = fyne.TextAlignLeading
+
+		// Проверка статуса туннеля
+		
+		// Проверка статуса туннеля
+var statusDot *canvas.Text
+if isTunnelConnected(confName) {
+	statusDot = canvas.NewText("●", color.RGBA{0x28, 0xa7, 0x45, 0xff}) // зелёный
+} else {
+	statusDot = canvas.NewText("●", color.Gray{Y: 160}) // серый
+}
+statusDot.TextSize = 14
+
+
+		// Имя конфигурации рядом с кружком
+		nameWithDot := container.NewHBox(statusDot, widget.NewLabel(" "), widget.NewLabel(confName))
+
+
 
 		editBtn := widget.NewButton("✏️", func() {
 			editConfigDialog(w, confName)
@@ -343,7 +356,8 @@ func refreshTunnelList(w fyne.Window) {
 		})
 		removeBtn.Importance = widget.DangerImportance
 
-		row := container.NewBorder(nil, nil, nil, container.NewHBox(editBtn, removeBtn), label)
+		row := container.NewBorder(nil, nil, nil, container.NewHBox(editBtn, removeBtn), nameWithDot)
+
 		selectBtn := widget.NewButton("", func() {
 			selectedTunnel = confName
 			checkStatusAndUpdateUI()
@@ -368,6 +382,7 @@ func refreshTunnelList(w fyne.Window) {
 	}
 	tunnelListContainer.Refresh()
 }
+
 
 // -------------------
 // editConfigDialog()
@@ -475,4 +490,21 @@ func checkStatusAndUpdateUI() {
 	status := map[bool]string{true: "Подключено", false: "Отключено"}[isConnected]
 	statusLabel.SetText("Status: " + status)
 	updateToggleButton()
+}
+func isTunnelConnected(name string) bool {
+	name = strings.TrimSuffix(name, ".conf")
+	var checkCmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		checkCmd = exec.Command("sc", "query", "WireGuardTunnel$"+name)
+	} else {
+		checkCmd = exec.Command("sudo", "wg", "show", name)
+	}
+	var out bytes.Buffer
+	checkCmd.Stdout, checkCmd.Stderr = &out, &out
+	_ = checkCmd.Run()
+
+	if runtime.GOOS == "windows" {
+		return strings.Contains(out.String(), "RUNNING")
+	}
+	return strings.Contains(out.String(), "interface: "+name)
 }

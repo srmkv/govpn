@@ -2,4 +2,4 @@
   Icon = "assets/icon.png"
   Name = "WireGuird VPN"
   ID = "com.wireguird.app"
-  Build = 25
+  Build = 27
